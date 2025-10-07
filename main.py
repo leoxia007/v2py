@@ -14,6 +14,7 @@ import socket
 import customtkinter
 import pystray
 from PIL import Image, ImageDraw, ImageFont
+import winreg
 
 # 全局变量，用于持有v2ray子进程对象
 v2ray_process = None
@@ -54,6 +55,60 @@ def get_persistent_data_path(filename):
 
     # 返回在应用专属文件夹下的文件路径
     return os.path.join(persistent_dir, filename)
+
+def get_app_settings_path():
+    """获取应用程序设置文件的路径。"""
+    return get_persistent_data_path("settings.json")
+
+def load_app_settings():
+    """从设置文件加载应用程序设置。"""
+    settings_path = get_app_settings_path()
+    default_settings = {
+        "run_on_startup": False,
+        "auto_start_v2ray": False
+    }
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                # 确保所有默认键都存在
+                for key, value in default_settings.items():
+                    if key not in settings:
+                        settings[key] = value
+                return settings
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"加载设置时出错，使用默认设置: {e}")
+            return default_settings
+    else:
+        return default_settings
+
+def save_app_settings(settings):
+    """将应用程序设置保存到设置文件。"""
+    settings_path = get_app_settings_path()
+    try:
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2)
+    except IOError as e:
+        print(f"保存设置时出错: {e}")
+
+def set_startup(enable):
+    """启用或禁用应用程序在系统启动时运行。"""
+    app_name = "V2flyClient"
+    app_path = sys.executable
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
+            if enable:
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, f'"{app_path}"')
+                print(f"设置启动项: {app_path}")
+            else:
+                try:
+                    winreg.DeleteValue(key, app_name)
+                    print("已删除启动项。")
+                except FileNotFoundError:
+                    pass  # 如果我们正在禁用它，则找不到键是正常的。
+    except Exception as e:
+        print(f"修改启动注册表失败: {e}")
 
 
 class ConfigGeneratorWindow(customtkinter.CTkToplevel):
@@ -239,6 +294,13 @@ class V2rayClientApp(customtkinter.CTk):
         self.create_widgets() # 创建UI组件
         self._setup_tray_icon() # 设置系统托盘图标
 
+        # 加载应用设置
+        self.settings = load_app_settings()
+        if self.settings.get("run_on_startup"):
+            self.run_on_startup_check.select()
+        if self.settings.get("auto_start_v2ray"):
+            self.auto_start_v2ray_check.select()
+
         # 获取v2ray核心程序路径
         self.v2ray_executable = resource_path(os.path.join('v2fly-core', 'v2ray.exe'))
         if not os.path.exists(self.v2ray_executable):
@@ -259,6 +321,10 @@ class V2rayClientApp(customtkinter.CTk):
         if not current_config_path:
             self.start_button.configure(state="disabled")
             self.test_latency_button.configure(state="disabled")
+
+        # 检查是否需要自动启动V2Ray
+        if self.settings.get("auto_start_v2ray") and current_config_path:
+            self.start_v2ray()
 
         # 在一个单独的线程中运行托盘图标，防止UI阻塞
         if self.icon:
@@ -298,6 +364,17 @@ class V2rayClientApp(customtkinter.CTk):
 
         self.minimize_button = customtkinter.CTkButton(button_frame, text="最小化到托盘", command=self._hide_window)
         self.minimize_button.pack(side=tk.RIGHT, padx=(10, 0))
+
+        # --- Autostart Settings ---
+        app_settings_frame = customtkinter.CTkFrame(self, corner_radius=0)
+        app_settings_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.run_on_startup_check = customtkinter.CTkCheckBox(app_settings_frame, text="开机自启动", command=self.toggle_run_on_startup)
+        self.run_on_startup_check.pack(side=tk.LEFT, anchor="w", padx=5)
+
+        self.auto_start_v2ray_check = customtkinter.CTkCheckBox(app_settings_frame, text="自动启动v2ray", command=self.toggle_auto_start_v2ray)
+        self.auto_start_v2ray_check.pack(side=tk.LEFT, anchor="w", padx=5)
+
 
         # --- 系统代理设置 ---
         proxy_frame = customtkinter.CTkFrame(self, corner_radius=0)
@@ -650,6 +727,21 @@ class V2rayClientApp(customtkinter.CTk):
             self.destroy() # 销毁窗口并退出程序
         else:
             self._hide_window() # 如果选择“取消”，则最小化到托盘
+
+    def toggle_run_on_startup(self):
+        """切换开机自启动设置。"""
+        is_enabled = self.run_on_startup_check.get()
+        self.settings["run_on_startup"] = is_enabled
+        save_app_settings(self.settings)
+        set_startup(is_enabled)
+        self.log_message(f"开机自启动已 {'启用' if is_enabled else '禁用'}。")
+
+    def toggle_auto_start_v2ray(self):
+        """切换自动启动V2Ray的设置。"""
+        is_enabled = self.auto_start_v2ray_check.get()
+        self.settings["auto_start_v2ray"] = is_enabled
+        save_app_settings(self.settings)
+        self.log_message(f"自动启动 V2Ray 已 {'启用' if is_enabled else '禁用'}。")
 
     def toggle_proxy_fields(self):
         """根据“启用系统代理”复选框的状态，启用或禁用下方的输入框和按钮"""
