@@ -13,6 +13,7 @@ import socket
 
 import customtkinter
 import pystray
+from pynput import keyboard
 from PIL import Image, ImageDraw, ImageFont
 import winreg
 import io
@@ -79,7 +80,9 @@ def load_app_settings():
     settings_path = get_app_settings_path()
     default_settings = {
         "run_on_startup": False,
-        "auto_start_v2ray": False
+        "auto_start_v2ray": False,
+        "enable_proxy_hotkey": "<alt>+z",
+        "disable_proxy_hotkey": "<alt>+x"
     }
     if os.path.exists(settings_path):
         try:
@@ -292,6 +295,70 @@ class ConfigGeneratorWindow(customtkinter.CTkToplevel):
         return config
 
 
+class HotkeySettingsWindow(customtkinter.CTkToplevel):
+    """
+    快捷键设置窗口
+    """
+    def __init__(self, master):
+        super().__init__(master)
+        self.master = master
+
+        self.title("快捷键设置")
+        self.geometry("400x200")
+        self.transient(master)
+        self.grab_set()
+
+        self.grid_columnconfigure(1, weight=1)
+
+        customtkinter.CTkLabel(self, text="全局快捷键设置").grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky="w")
+
+        customtkinter.CTkLabel(self, text="启用系统代理:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.enable_hotkey_entry = customtkinter.CTkEntry(self, width=150)
+        self.enable_hotkey_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        self.enable_hotkey_entry.insert(0, self.master.settings.get("enable_proxy_hotkey", "<ctrl>+<alt>+e"))
+
+        customtkinter.CTkLabel(self, text="清除系统代理:").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.disable_hotkey_entry = customtkinter.CTkEntry(self, width=150)
+        self.disable_hotkey_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        self.disable_hotkey_entry.insert(0, self.master.settings.get("disable_proxy_hotkey", "<ctrl>+<alt>+d"))
+
+        button_frame = customtkinter.CTkFrame(self, fg_color="transparent")
+        button_frame.grid(row=3, column=0, columnspan=2, pady=20)
+        
+        self.save_button = customtkinter.CTkButton(button_frame, text="保存", command=self.save_hotkeys)
+        self.save_button.pack(side=tk.LEFT, padx=10)
+        self.cancel_button = customtkinter.CTkButton(button_frame, text="取消", command=self.destroy)
+        self.cancel_button.pack(side=tk.LEFT, padx=10)
+
+    def save_hotkeys(self):
+        """保存快捷键设置"""
+        enable_hotkey = self.enable_hotkey_entry.get().strip()
+        disable_hotkey = self.disable_hotkey_entry.get().strip()
+
+        if not enable_hotkey or not disable_hotkey:
+            messagebox.showwarning("警告", "快捷键不能为空。", parent=self)
+            return
+        
+        try:
+            # 在保存前验证快捷键
+            keyboard.HotKey.parse(enable_hotkey)
+            keyboard.HotKey.parse(disable_hotkey)
+        except Exception as e:
+            messagebox.showerror("快捷键错误", f"无法解析快捷键，请检查格式（例如 '<ctrl>+<alt>+e'）。\n错误: {e}", parent=self)
+            return
+
+        self.master.settings["enable_proxy_hotkey"] = enable_hotkey
+        self.master.settings["disable_proxy_hotkey"] = disable_hotkey
+        save_app_settings(self.master.settings)
+        self.master.log_message("快捷键已保存。正在重新加载快捷键...")
+        
+        # 重新设置快捷键
+        self.master.setup_hotkeys()
+        
+        messagebox.showinfo("成功", "快捷键已更新。", parent=self)
+        self.destroy()
+
+
 class V2rayClientApp(customtkinter.CTk):
     """
     主应用窗口类。
@@ -302,6 +369,7 @@ class V2rayClientApp(customtkinter.CTk):
         self.v2ray_process = None
         self.current_config_path = ""
         self.generator_window = None # 用于持有配置生成器窗口的引用
+        self.hotkey_window = None # 用于持有快捷键设置窗口的引用
 
         self.title("V2fly 客户端")
         self.geometry("800x600")
@@ -310,11 +378,12 @@ class V2rayClientApp(customtkinter.CTk):
         customtkinter.set_appearance_mode("System")
         customtkinter.set_default_color_theme("blue")
 
+        # 加载应用设置
+        self.settings = load_app_settings()
+
         self.create_widgets() # 创建UI组件
         self._setup_tray_icon() # 设置系统托盘图标
 
-        # 加载应用设置
-        self.settings = load_app_settings()
         if self.settings.get("run_on_startup"):
             self.run_on_startup_check.select()
         if self.settings.get("auto_start_v2ray"):
@@ -348,6 +417,10 @@ class V2rayClientApp(customtkinter.CTk):
         # 在一个单独的线程中运行托盘图标，防止UI阻塞
         if self.icon:
             threading.Thread(target=self.icon.run, daemon=True).start()
+
+        # 设置全局快捷键
+        self.hotkey_listener = None
+        self.setup_hotkeys()
 
     def create_widgets(self):
         """创建主窗口的所有UI组件"""
@@ -426,7 +499,10 @@ class V2rayClientApp(customtkinter.CTk):
         self.apply_proxy_button = customtkinter.CTkButton(proxy_buttons_frame, text="应用代理", command=self.apply_system_proxy)
         self.apply_proxy_button.pack(side=tk.LEFT, padx=(0, 10))
         self.clear_proxy_button = customtkinter.CTkButton(proxy_buttons_frame, text="清除代理", command=self.clear_system_proxy)
-        self.clear_proxy_button.pack(side=tk.LEFT)
+        self.clear_proxy_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.hotkey_settings_button = customtkinter.CTkButton(proxy_buttons_frame, text="快捷键设置...", command=self.open_hotkey_window)
+        self.hotkey_settings_button.pack(side=tk.LEFT)
 
         self.toggle_proxy_fields() # 初始化代理设置区域的UI状态
 
@@ -482,6 +558,20 @@ class V2rayClientApp(customtkinter.CTk):
             self.generator_window = ConfigGeneratorWindow(self)
         else:
             self.generator_window.focus() # 如果已存在，则将其带到前台
+
+    def open_hotkey_window(self):
+        """打开快捷键设置窗口"""
+        if self.hotkey_window is None or not self.hotkey_window.winfo_exists():
+            self.hotkey_window = HotkeySettingsWindow(self)
+        else:
+            self.hotkey_window.focus()
+
+    def open_hotkey_window(self):
+        """打开快捷键设置窗口"""
+        if self.hotkey_window is None or not self.hotkey_window.winfo_exists():
+            self.hotkey_window = HotkeySettingsWindow(self)
+        else:
+            self.hotkey_window.focus()
 
     def save_config_file(self):
         """保存对配置文件的修改"""
@@ -748,9 +838,52 @@ class V2rayClientApp(customtkinter.CTk):
             if self.v2ray_process and self.v2ray_process.poll() is None:
                 self.after(0, lambda: self.test_speed_button.configure(state="normal"))
 
+    def setup_hotkeys(self):
+        """设置并启动全局快捷键监听器"""
+        if self.hotkey_listener:
+            try:
+                self.hotkey_listener.stop()
+            except Exception as e:
+                self.log_message(f"停止旧的快捷键监听器时出错: {e}")
+
+        enable_hotkey = self.settings.get("enable_proxy_hotkey", "<ctrl>+<alt>+e")
+        disable_hotkey = self.settings.get("disable_proxy_hotkey", "<ctrl>+<alt>+d")
+
+        def on_activate_enable():
+            self.log_message("检测到启用代理快捷键。")
+            self.after(0, self.apply_system_proxy_hotkey)
+
+        def on_activate_disable():
+            self.log_message("检测到清除代理快捷键。")
+            self.after(0, self.clear_system_proxy)
+
+        try:
+            # 验证快捷键组合
+            keyboard.HotKey.parse(enable_hotkey)
+            keyboard.HotKey.parse(disable_hotkey)
+            
+            hotkeys = {
+                enable_hotkey: on_activate_enable,
+                disable_hotkey: on_activate_disable
+            }
+            self.hotkey_listener = keyboard.GlobalHotKeys(hotkeys)
+            self.hotkey_listener.start()
+            self.log_message(f"已设置快捷键: 启用代理({enable_hotkey}), 清除代理({disable_hotkey})")
+        except Exception as e:
+            self.log_message(f"设置快捷键失败: {e}")
+            messagebox.showerror("快捷键错误", f"无法解析快捷键，请检查格式（例如 '<ctrl>+<alt>+e'）。\n错误: {e}")
+
+    def apply_system_proxy_hotkey(self):
+        """通过快捷键应用系统代理"""
+        self.proxy_enable_check.select()
+        self.toggle_proxy_fields()
+        self.apply_system_proxy()
+
     def on_closing(self):
         """处理点击窗口关闭按钮的事件"""
         if messagebox.askokcancel("退出", "确定要退出客户端吗？V2ray 进程将会被停止。"):
+            if self.hotkey_listener:
+                self.hotkey_listener.stop()
             self.stop_v2ray()
             self.destroy() # 销毁窗口并退出程序
         else:
@@ -902,6 +1035,8 @@ class V2rayClientApp(customtkinter.CTk):
         """处理从托盘菜单退出的事件"""
         if self.icon:
             self.icon.stop() # 停止托盘图标
+        if self.hotkey_listener:
+            self.hotkey_listener.stop()
         self.stop_v2ray() # 停止v2ray
         self.quit()       # 退出Tkinter主循环
 
