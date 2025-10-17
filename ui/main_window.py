@@ -92,110 +92,129 @@ class V2rayClientApp(customtkinter.CTk):
 
     def create_widgets(self):
         """创建主窗口的所有UI组件"""
-        self._create_control_frame()
-        self._create_button_frame()
-        self._create_app_settings_frame()
-        self._create_proxy_frame()
-        self._create_log_frame()
-        self._create_editor_frame()
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-    def _create_control_frame(self):
-        """创建顶部控制栏"""
-        control_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        control_frame.pack(fill=tk.X, padx=10, pady=10)
+        self._create_top_frame()
+        self._create_log_and_editor_frames()
 
-        customtkinter.CTkLabel(control_frame, text="配置文件:").pack(side=tk.LEFT, padx=(0, 5))
-        self.config_path_label = customtkinter.CTkLabel(control_frame, text="未选择", width=250, anchor="w")
-        self.config_path_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+    def _create_top_frame(self):
+        """创建包含所有控制和设置的顶部框架"""
+        top_frame = customtkinter.CTkFrame(self)
+        top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        top_frame.grid_columnconfigure(0, weight=1)
+
+        # --- Row 0: Config Path ---
+        config_frame = customtkinter.CTkFrame(top_frame, fg_color="transparent")
+        config_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
+        config_frame.grid_columnconfigure(1, weight=1)
+
+        customtkinter.CTkLabel(config_frame, text="配置文件:").grid(row=0, column=0, sticky="w")
+        self.config_path_label = customtkinter.CTkLabel(config_frame, text="未选择", anchor="w")
+        self.config_path_label.grid(row=0, column=1, sticky="ew", padx=10)
         
-        self.select_config_button = customtkinter.CTkButton(control_frame, text="选择配置文件", command=self.select_config_file)
-        self.select_config_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.select_config_button = customtkinter.CTkButton(config_frame, text="选择配置", command=self.select_config_file, width=100)
+        self.select_config_button.grid(row=0, column=2, padx=(0, 5))
 
-        self.generate_config_button = customtkinter.CTkButton(control_frame, text="生成配置", command=self.open_generator_window)
-        self.generate_config_button.pack(side=tk.LEFT)
+        self.generate_config_button = customtkinter.CTkButton(config_frame, text="生成配置", command=self.open_generator_window, width=100)
+        self.generate_config_button.grid(row=0, column=3)
 
-    def _create_button_frame(self):
-        """创建启动/停止按钮栏"""
-        button_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        button_frame.pack(fill=tk.X, padx=10, pady=5)
+        # --- Row 1: Main Actions ---
+        main_actions_frame = customtkinter.CTkFrame(top_frame, fg_color="transparent")
+        main_actions_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
-        self.start_button = customtkinter.CTkButton(button_frame, text="启动 V2ray", command=self.start_v2ray, fg_color="green", hover_color="#008000")
-        self.start_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.start_button = customtkinter.CTkButton(main_actions_frame, text="启动 V2ray", command=self.start_v2ray, fg_color="green", hover_color="#008000")
+        self.start_button.grid(row=0, column=0, padx=(0, 5))
 
-        self.stop_button = customtkinter.CTkButton(button_frame, text="停止 V2ray", command=self.stop_v2ray, fg_color="red", hover_color="#800000", state="disabled")
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.stop_button = customtkinter.CTkButton(main_actions_frame, text="停止 V2ray", command=self.stop_v2ray, fg_color="red", hover_color="#800000", state="disabled")
+        self.stop_button.grid(row=0, column=1, padx=5)
 
-        self.test_latency_button = customtkinter.CTkButton(button_frame, text="测试延迟", command=self.test_latency, state="disabled")
-        self.test_latency_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.test_latency_button = customtkinter.CTkButton(main_actions_frame, text="测试延迟", command=self.test_latency, state="disabled")
+        self.test_latency_button.grid(row=0, column=2, padx=5)
 
-        self.test_speed_button = customtkinter.CTkButton(button_frame, text="测试速度", command=self.test_speed, state="disabled")
-        self.test_speed_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.test_speed_button = customtkinter.CTkButton(main_actions_frame, text="测试速度", command=self.test_speed, state="disabled")
+        self.test_speed_button.grid(row=0, column=3, padx=5)
 
-        self.minimize_button = customtkinter.CTkButton(button_frame, text="最小化到托盘", command=self._hide_window)
-        self.minimize_button.pack(side=tk.RIGHT, padx=(10, 0))
+        main_actions_frame.grid_columnconfigure(4, weight=1)
+        self.minimize_button = customtkinter.CTkButton(main_actions_frame, text="最小化到托盘", command=self._hide_window)
+        self.minimize_button.grid(row=0, column=5, sticky="e")
 
-    def _create_app_settings_frame(self):
-        """创建应用设置栏"""
-        app_settings_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        app_settings_frame.pack(fill=tk.X, padx=10, pady=5)
+        # --- Row 2: Settings ---
+        settings_container = customtkinter.CTkFrame(top_frame)
+        settings_container.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(5, 10))
+        settings_container.grid_columnconfigure(1, weight=1)
 
+        # App Settings
+        app_settings_frame = customtkinter.CTkFrame(settings_container, fg_color="transparent")
+        app_settings_frame.grid(row=0, column=0, sticky="nsew", padx=(10, 5), pady=5)
+        
+        customtkinter.CTkLabel(app_settings_frame, text="应用设置", font=customtkinter.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", pady=(0,5))
         self.run_on_startup_check = customtkinter.CTkCheckBox(app_settings_frame, text="开机自启动", command=self.toggle_run_on_startup)
-        self.run_on_startup_check.pack(side=tk.LEFT, anchor="w", padx=5)
-
+        self.run_on_startup_check.grid(row=1, column=0, sticky="w")
         self.auto_start_v2ray_check = customtkinter.CTkCheckBox(app_settings_frame, text="自动启动v2ray", command=self.toggle_auto_start_v2ray)
-        self.auto_start_v2ray_check.pack(side=tk.LEFT, anchor="w", padx=5)
+        self.auto_start_v2ray_check.grid(row=2, column=0, sticky="w", pady=(5,0))
 
-    def _create_proxy_frame(self):
-        """创建系统代理设置栏"""
-        proxy_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        proxy_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Proxy Settings
+        proxy_frame = customtkinter.CTkFrame(settings_container, fg_color="transparent")
+        proxy_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=5)
+        proxy_frame.grid_columnconfigure(1, weight=1)
 
-        customtkinter.CTkLabel(proxy_frame, text="系统代理设置").pack(anchor="w", padx=5, pady=5)
-
+        customtkinter.CTkLabel(proxy_frame, text="系统代理设置", font=customtkinter.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,5))
         self.proxy_enable_check = customtkinter.CTkCheckBox(proxy_frame, text="启用系统代理", command=self.toggle_proxy_fields)
-        self.proxy_enable_check.pack(anchor="w", padx=5)
+        self.proxy_enable_check.grid(row=1, column=0, columnspan=2, sticky="w")
 
         proxy_address_frame = customtkinter.CTkFrame(proxy_frame, fg_color="transparent")
-        proxy_address_frame.pack(fill=tk.X, pady=5)
-        customtkinter.CTkLabel(proxy_address_frame, text="代理地址 (例如: 127.0.0.1:10809): ").pack(side=tk.LEFT)
-        self.proxy_address_entry = customtkinter.CTkEntry(proxy_address_frame, width=200)
-        self.proxy_address_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        proxy_address_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
+        proxy_address_frame.grid_columnconfigure(1, weight=1)
+        customtkinter.CTkLabel(proxy_address_frame, text="代理地址:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.proxy_address_entry = customtkinter.CTkEntry(proxy_address_frame)
+        self.proxy_address_entry.grid(row=0, column=1, sticky="ew")
         self.proxy_address_entry.insert(0, f"127.0.0.1:{HTTP_INBOUND_PORT}")
 
         proxy_buttons_frame = customtkinter.CTkFrame(proxy_frame, fg_color="transparent")
-        proxy_buttons_frame.pack(fill=tk.X, pady=5)
-        self.apply_proxy_button = customtkinter.CTkButton(proxy_buttons_frame, text="应用代理", command=self.apply_system_proxy)
-        self.apply_proxy_button.pack(side=tk.LEFT, padx=(0, 10))
-        self.clear_proxy_button = customtkinter.CTkButton(proxy_buttons_frame, text="清除代理", command=self.clear_system_proxy)
-        self.clear_proxy_button.pack(side=tk.LEFT, padx=(0, 10))
+        proxy_buttons_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(5,0))
+        self.apply_proxy_button = customtkinter.CTkButton(proxy_buttons_frame, text="应用", command=self.apply_system_proxy, width=60)
+        self.apply_proxy_button.grid(row=0, column=0)
+        self.clear_proxy_button = customtkinter.CTkButton(proxy_buttons_frame, text="清除", command=self.clear_system_proxy, width=60)
+        self.clear_proxy_button.grid(row=0, column=1, padx=5)
+        proxy_buttons_frame.grid_columnconfigure(2, weight=1)
+        self.hotkey_settings_button = customtkinter.CTkButton(proxy_buttons_frame, text="快捷键...", command=self.open_hotkey_window)
+        self.hotkey_settings_button.grid(row=0, column=3, sticky="e")
 
-        self.hotkey_settings_button = customtkinter.CTkButton(proxy_buttons_frame, text="快捷键设置...", command=self.open_hotkey_window)
-        self.hotkey_settings_button.pack(side=tk.LEFT)
+        self.toggle_proxy_fields()
 
-        self.toggle_proxy_fields() # 初始化代理设置区域的UI状态
+    def _create_log_and_editor_frames(self):
+        """创建可调整大小的日志和编辑器区域"""
+        paned_window = tk.PanedWindow(self, orient=tk.VERTICAL, sashrelief=tk.RAISED, bg="gray")
+        paned_window.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
-    def _create_log_frame(self):
-        """创建日志输出区域"""
-        customtkinter.CTkLabel(self, text="日志输出:").pack(anchor="w", padx=10, pady=(10, 0))
-        self.log_text = customtkinter.CTkTextbox(self, wrap="word", height=15)
-        self.log_text.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
-        self.log_text.configure(state="disabled") # 默认设为不可编辑
+        # Log frame
+        log_frame = customtkinter.CTkFrame(paned_window, corner_radius=0)
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(1, weight=1)
+        customtkinter.CTkLabel(log_frame, text="日志输出:").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 0))
+        self.log_text = customtkinter.CTkTextbox(log_frame, wrap="word")
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        self.log_text.configure(state="disabled")
+        paned_window.add(log_frame, height=150) # Initial height
 
-    def _create_editor_frame(self):
-        """创建配置文件编辑器"""
-        editor_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        editor_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Editor frame
+        editor_frame = customtkinter.CTkFrame(paned_window, corner_radius=0)
+        editor_frame.grid_columnconfigure(0, weight=1)
+        editor_frame.grid_rowconfigure(1, weight=1)
         
         editor_label_frame = customtkinter.CTkFrame(editor_frame, fg_color="transparent")
-        editor_label_frame.pack(fill=tk.X)
+        editor_label_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,0))
+        editor_label_frame.grid_columnconfigure(0, weight=1)
 
-        customtkinter.CTkLabel(editor_label_frame, text="配置文件内容 (可编辑):").pack(side=tk.LEFT, anchor="w", pady=(10, 0))
+        customtkinter.CTkLabel(editor_label_frame, text="配置文件内容 (可编辑):").grid(row=0, column=0, sticky="w")
         self.save_config_button = customtkinter.CTkButton(editor_label_frame, text="保存更改", command=self.save_config_file)
-        self.save_config_button.pack(side=tk.RIGHT, padx=(0, 5))
+        self.save_config_button.grid(row=0, column=1)
 
-        self.config_editor = customtkinter.CTkTextbox(editor_frame, wrap="word", height=10)
-        self.config_editor.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.config_editor = customtkinter.CTkTextbox(editor_frame, wrap="word")
+        self.config_editor.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
         self.config_editor.configure(state="normal")
+        paned_window.add(editor_frame)
 
     def log_message(self, message):
         """在UI的日志区域显示一条消息"""
