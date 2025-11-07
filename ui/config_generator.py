@@ -9,15 +9,17 @@ import json
 import uuid
 
 from core.constants import SOCKS_INBOUND_PORT, HTTP_INBOUND_PORT
+from core.utils import resource_path
 
 class ConfigGeneratorWindow(customtkinter.CTkToplevel):
     """
     配置生成器窗口。
     这是一个customtkinter的顶层窗口（CTkToplevel），用于创建新的v2ray配置文件。
     """
-    def __init__(self, master):
+    def __init__(self, master, on_generate_success):
         super().__init__(master)
         self.master = master # master是主窗口的引用
+        self.on_generate_success = on_generate_success
 
         self.title("配置生成器")
         self.geometry("480x480")
@@ -107,8 +109,7 @@ class ConfigGeneratorWindow(customtkinter.CTkToplevel):
             filename += '.json'
 
         # 决定配置文件的保存路径
-        application_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.abspath(".")
-        configs_dir = os.path.join(application_path, 'configs')
+        configs_dir = resource_path('configs')
         if not os.path.exists(configs_dir):
             os.makedirs(configs_dir)
         
@@ -125,14 +126,8 @@ class ConfigGeneratorWindow(customtkinter.CTkToplevel):
             with open(new_filepath, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             
-            # 更新主窗口状态
-            self.master.log_message(f"成功生成配置文件: {new_filepath}")
-            self.master.current_config_path = new_filepath
-            self.master.config_path_label.configure(text=self.master.current_config_path)
-            self.master.load_config_to_editor(self.master.current_config_path)
-            self.master.save_last_config_path(self.master.current_config_path)
-            self.master.start_button.configure(state="normal")
-            self.master.test_latency_button.configure(state="normal")
+            # 调用回调函数通知主窗口
+            self.on_generate_success(new_filepath)
             self.destroy() # 关闭生成器窗口
         except Exception as e:
             self.master.log_message(f"生成配置文件失败: {e}")

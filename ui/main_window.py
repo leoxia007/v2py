@@ -2,7 +2,6 @@
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
-import subprocess
 import json
 import os
 import threading
@@ -22,7 +21,9 @@ from icon_data import get_icon_base64
 from core.constants import V2RAY_CORE_PATH, HTTP_INBOUND_PORT, DEFAULT_CONFIG_PATH
 from core.settings import load_app_settings, save_app_settings, get_persistent_data_path
 from core.utils import resource_path
-from core.proxy import set_startup
+from core.startup import set_startup
+from core.v2ray_manager import V2rayManager
+from core.proxy_manager import ProxyManager
 
 from ui.config_generator import ConfigGeneratorWindow
 from ui.hotkey_settings import HotkeySettingsWindow
@@ -34,7 +35,6 @@ class V2rayClientApp(customtkinter.CTk):
     """
     def __init__(self, master=None):
         super().__init__()
-        self.v2ray_process = None
         self.current_config_path = ""
         self.generator_window = None # 用于持有配置生成器窗口的引用
         self.hotkey_window = None # 用于持有快捷键设置窗口的引用
@@ -45,6 +45,12 @@ class V2rayClientApp(customtkinter.CTk):
         # 设置UI主题
         customtkinter.set_appearance_mode("System")
         customtkinter.set_default_color_theme("blue")
+        
+        # 初始化V2Ray管理器
+        self.v2ray_manager = V2rayManager(self.log_message_from_thread)
+
+        # 初始化代理管理器
+        self.proxy_manager = ProxyManager(self.log_message_from_thread)
 
         # 加载应用设置
         self.settings = load_app_settings()
@@ -56,11 +62,6 @@ class V2rayClientApp(customtkinter.CTk):
             self.run_on_startup_check.select()
         if self.settings.get("auto_start_v2ray"):
             self.auto_start_v2ray_check.select()
-
-        # 获取v2ray核心程序路径
-        self.v2ray_executable = resource_path(V2RAY_CORE_PATH)
-        if not os.path.exists(self.v2ray_executable):
-            self.log_message(f"错误: 找不到 v2ray.exe，请确保它在 {self.v2ray_executable} 路径下。")
 
         # 加载上次使用的配置文件
         last_path = self.load_last_config_path()
@@ -242,7 +243,7 @@ class V2rayClientApp(customtkinter.CTk):
     def open_generator_window(self):
         """打开配置生成器窗口"""
         if self.generator_window is None or not self.generator_window.winfo_exists():
-            self.generator_window = ConfigGeneratorWindow(self)
+            self.generator_window = ConfigGeneratorWindow(self, on_generate_success=self.handle_config_generated)
         else:
             self.generator_window.focus() # 如果已存在，则将其带到前台
 
@@ -303,77 +304,50 @@ class V2rayClientApp(customtkinter.CTk):
             self.start_button.configure(state="disabled")
             self.test_latency_button.configure(state="disabled")
 
+    def handle_config_generated(self, new_filepath):
+        """Callback function for when a new config is generated."""
+        self.log_message(f"成功生成配置文件: {new_filepath}")
+        self.current_config_path = new_filepath
+        self.config_path_label.configure(text=self.current_config_path)
+        self.load_config_to_editor(self.current_config_path)
+        self.save_last_config_path(self.current_config_path)
+        self.start_button.configure(state="normal")
+        self.test_latency_button.configure(state="normal")
+
+    def log_message_from_thread(self, message):
+        """从后台线程安全地记录消息到UI"""
+        self.after(0, self.log_message, message)
+
     def start_v2ray(self):
         """启动v2ray核心进程"""
         if not self.current_config_path:
             messagebox.showwarning("警告", "请先选择 v2ray 配置文件！")
             return
-        if self.v2ray_process and self.v2ray_process.poll() is None:
+        if self.v2ray_manager.is_running():
             messagebox.showinfo("信息", "V2ray 已经在运行中")
             return
-        self.log_message("正在启动 V2ray...")
-        try:
-            # 在新线程中启动v2ray，避免UI阻塞
-            threading.Thread(target=self._run_v2ray_in_thread, daemon=True).start()
+
+        # 将UI更新回调传递给管理器
+        on_exit_callback = lambda: self.after(0, self._on_v2ray_stopped)
+        
+        if self.v2ray_manager.start(self.current_config_path, on_exit_callback):
             self.start_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
-            self.test_latency_button.configure(state="disabled")
+            self.test_latency_button.configure(state="disabled") # 启动时禁用延迟测试
             self.test_speed_button.configure(state="normal")
-        except Exception as e:
-            self.log_message(f"启动 V2ray 失败: {e}")
-            self.start_button.configure(state="normal")
-            self.stop_button.configure(state="disabled")
-
-    def _run_v2ray_in_thread(self):
-        """在后台线程中运行v2ray进程并监控其输出"""
-        try:
-            # 在Windows上使用CREATE_NO_WINDOW标志来隐藏v2ray的命令行窗口
-            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            self.v2ray_process = subprocess.Popen(
-                [self.v2ray_executable, "run", "-c", self.current_config_path],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', creationflags=creationflags
-            )
-            self.log_message("V2ray 已启动")
-            # 创建线程分别读取标准输出和标准错误
-            stdout_thread = threading.Thread(target=self._read_stream, args=(self.v2ray_process.stdout, "V2ray STDOUT"), daemon=True)
-            stderr_thread = threading.Thread(target=self._read_stream, args=(self.v2ray_process.stderr, "V2ray STDERR"), daemon=True)
-            stdout_thread.start()
-            stderr_thread.start()
-            self.v2ray_process.wait() # 等待v2ray进程结束
-            self.log_message(f"V2ray 进程已退出，退出码: {self.v2ray_process.returncode}")
-            self.after(0, self._on_v2ray_stopped) # 在主线程中更新UI
-        except FileNotFoundError:
-            self.log_message(f"错误: 找不到 v2ray.exe，请检查路径: {self.v2ray_executable}")
-            self.after(0, self._on_v2ray_stopped)
-        except Exception as e:
-            self.log_message(f"V2ray 运行出错: {e}")
-            self.after(0, self._on_v2ray_stopped)
-
-    def _read_stream(self, stream, name):
-        """读取v2ray进程的输出流并显示在日志区域"""
-        for line in stream:
-            # self.after(0, ...)确保UI更新在主线程中执行
-            self.after(0, self.log_message, f"[{name}] {line.strip()}")
+        else:
+            # 如果启动失败，确保UI状态正确
+            self._on_v2ray_stopped()
 
     def stop_v2ray(self):
         """停止v2ray核心进程"""
-        if self.v2ray_process and self.v2ray_process.poll() is None:
-            self.log_message("正在停止 V2ray...")
-            try:
-                self.v2ray_process.terminate() # 尝试正常终止
-                self.v2ray_process.wait(timeout=5) # 等待5秒
-                self.log_message("V2ray 已停止")
-            except subprocess.TimeoutExpired:
-                self.v2ray_process.kill() # 如果超时，则强制终止
-                self.log_message("V2ray 强制停止")
-            except Exception as e:
-                self.log_message(f"停止 V2ray 失败: {e}")
-            finally:
-                self.v2ray_process = None
-                self._on_v2ray_stopped()
-        else:
+        if not self.v2ray_manager.is_running():
             self.log_message("V2ray 未运行")
-            self._on_v2ray_stopped()
+            self._on_v2ray_stopped() # 确保UI状态一致
+            return
+        
+        self.v2ray_manager.stop()
+        # on_exit_callback 将在进程真正退出后更新UI
 
     def _on_v2ray_stopped(self):
         """当v2ray停止后，更新UI按钮的状态"""
@@ -388,7 +362,7 @@ class V2rayClientApp(customtkinter.CTk):
     def test_latency(self):
         """启动延迟测试线程"""
         if not self.current_config_path:
-            self.log_message("错误: 未选择配置文件，无法测试延迟。")
+            self.log_message("错误: 未选择配置文件，无法测试延迟。" )
             return
         
         self.log_message("正在测试延迟...")
@@ -432,7 +406,7 @@ class V2rayClientApp(customtkinter.CTk):
             self.after(0, self.log_message, f"延迟测试出错: {e}")
         finally:
             # 无论成功与否，测试结束后都重新启用按钮
-            if self.v2ray_process is None or self.v2ray_process.poll() is not None:
+            if not self.v2ray_manager.is_running():
                  self.after(0, lambda: self.test_latency_button.configure(state="normal") )
 
     def _get_config_details(self, config_content):
@@ -459,7 +433,7 @@ class V2rayClientApp(customtkinter.CTk):
 
     def test_speed(self):
         """启动速度测试线程"""
-        if self.v2ray_process is None or self.v2ray_process.poll() is not None:
+        if not self.v2ray_manager.is_running():
             self.log_message("错误: V2ray 未运行，无法测试速度。" )
             return
             
@@ -515,7 +489,7 @@ class V2rayClientApp(customtkinter.CTk):
         except Exception as e:
             self.after(0, self.log_message, f"速度测试出错: {e}")
         finally:
-            if self.v2ray_process and self.v2ray_process.poll() is None:
+            if self.v2ray_manager.is_running():
                 self.after(0, lambda: self.test_speed_button.configure(state="normal") )
 
     def setup_hotkeys(self):
@@ -597,58 +571,15 @@ class V2rayClientApp(customtkinter.CTk):
             messagebox.showwarning("警告", "代理地址不能为空！")
             return
         if self.proxy_enable_check.get():
-            self._set_system_proxy(proxy_address)
+            self.proxy_manager.set_proxy(proxy_address)
         else:
-            self._clear_system_proxy_settings()
+            self.proxy_manager.clear_proxy()
 
     def clear_system_proxy(self):
         """清除系统代理设置"""
         self.proxy_enable_check.deselect()
         self.toggle_proxy_fields()
-        self._clear_system_proxy_settings()
-
-    def _set_system_proxy(self, proxy_address):
-        """通过修改Windows注册表来设置系统代理"""
-        try:
-            import winreg
-            # 打开注册表项
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings", 0, winreg.KEY_WRITE)
-            # 设置代理启用状态、代理服务器地址和本地地址不走代理
-            winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1)
-            winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, proxy_address)
-            winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ, "<local>")
-            winreg.CloseKey(key)
-            self.log_message(f"系统代理已设置为: {proxy_address}")
-            self._refresh_internet_settings()
-        except Exception as e:
-            self.log_message(f"设置系统代理失败: {e}")
-            messagebox.showerror("错误", f"设置系统代理失败: {e}")
-
-    def _clear_system_proxy_settings(self):
-        """通过修改Windows注册表来清除系统代理"""
-        try:
-            import winreg
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings", 0, winreg.KEY_WRITE)
-            winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 0)
-            # 尝试删除代理服务器地址和覆盖设置，忽略可能的文件未找到错误
-            try:
-                winreg.DeleteValue(key, "ProxyServer")
-            except FileNotFoundError:
-                pass
-            try:
-                winreg.DeleteValue(key, "ProxyOverride")
-            except FileNotFoundError:
-                pass
-            winreg.CloseKey(key)
-            self.log_message("系统代理已清除。" )
-            self._refresh_internet_settings()
-        except Exception as e:
-            self.log_message(f"清除系统代理失败: {e}")
-            messagebox.showerror("错误", f"清除系统代理失败: {e}")
-
-    def _refresh_internet_settings(self):
-        """提醒用户代理设置可能需要重启浏览器或相关应用才能生效"""
-        self.log_message("请注意：系统代理设置可能需要重启浏览器或相关应用才能生效。" )
+        self.proxy_manager.clear_proxy()
 
     def save_last_config_path(self, path):
         """将最后一次使用的配置文件路径保存到文件中"""
@@ -727,4 +658,3 @@ class V2rayClientApp(customtkinter.CTk):
     def _stop_v2ray_from_tray(self, icon, item):
         """从托盘菜单停止v2ray"""
         self.after(0, self.stop_v2ray)
-
